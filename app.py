@@ -1139,7 +1139,67 @@ def main():
                 st.session_state.data_loaded = False
                 st.session_state.df = None
         
-        # Only show data if it's loaded
+        # Always show download option if data exists
+        if st.session_state.data_loaded and st.session_state.df is not None and not st.session_state.df.empty:
+            successful_hires_df = st.session_state.df[st.session_state.df['successful_date'].notna()].copy()
+            
+            if len(successful_hires_df) > 0:
+                st.markdown("---")
+                st.subheader("💾 Download Complete Analysis")
+                
+                # Prepare download data
+                cost_columns = [
+                    'actual_visa_cost', 'lost_evisa_share', 'total_ticket_cost', 
+                    'total_ticket_refund', 'lost_ticket_share', 'bas_cost_share',
+                    'DataAnalysts_and_Programmers_cost_share', 'Agents_cost_share',
+                    'llm_cost_share', 'referral_cost', 'broadcast_cost',
+                    'marketing_cost_per_hire', 'operator_cost', 'attestation_cost'
+                ]
+                
+                # Ensure all cost columns exist and fill NaN with 0
+                for col in cost_columns:
+                    if col not in successful_hires_df.columns:
+                        successful_hires_df[col] = 0
+                    successful_hires_df[col] = successful_hires_df[col].fillna(0)
+                
+                # Calculate net ticket cost and total cost per hire
+                successful_hires_df['net_ticket_cost'] = successful_hires_df['total_ticket_cost'] - successful_hires_df['total_ticket_refund']
+                successful_hires_df['total_cost_per_hire'] = (
+                    successful_hires_df['actual_visa_cost'] +
+                    successful_hires_df['lost_evisa_share'] +
+                    successful_hires_df['net_ticket_cost'] +
+                    successful_hires_df['lost_ticket_share'] +
+                    successful_hires_df['bas_cost_share'] +
+                    successful_hires_df['DataAnalysts_and_Programmers_cost_share'] +
+                    successful_hires_df['Agents_cost_share'] +
+                    successful_hires_df['llm_cost_share'] +
+                    successful_hires_df['referral_cost'] +
+                    successful_hires_df['broadcast_cost'] +
+                    successful_hires_df['marketing_cost_per_hire'] +
+                    successful_hires_df['operator_cost'] +
+                    successful_hires_df['attestation_cost']
+                )
+                
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.info(f"📥 **{len(successful_hires_df):,} successful hires** ready for download with complete cost breakdown")
+                with col2:
+                    # Prepare data for download
+                    download_df = successful_hires_df.copy()
+                    numeric_columns = download_df.select_dtypes(include=['float64', 'int64']).columns
+                    download_df[numeric_columns] = download_df[numeric_columns].round(2)
+                    
+                    csv_data = download_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download CSV",
+                        data=csv_data,
+                        file_name=f"cost_per_hire_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        type="primary",
+                        use_container_width=True
+                    )
+        
+        # Only show detailed data if it's loaded
         if st.session_state.data_loaded and st.session_state.df is not None:
             df = st.session_state.df
             
@@ -1430,36 +1490,152 @@ def main():
         3. **Weighted Attribution**: Each month's spend is weighted based on historical conversion probability
         """)
         
-        if st.session_state.df is not None:
+        if st.session_state.data_loaded and st.session_state.df is not None and not st.session_state.df.empty:
             df = st.session_state.df
-            marketing_summary = df[df['successful_date'].notna()].groupby(['nationality_category', 'location_category'])['marketing_cost_per_hire'].agg(['count', 'mean', 'sum']).round(2)
-            marketing_summary.columns = ['Hire Count', 'Avg Cost per Hire', 'Total Cost']
-            st.dataframe(marketing_summary, use_container_width=True)
+            successful_df = df[df['successful_date'].notna()].copy()
+            
+            if not successful_df.empty:
+                # Create monthly aggregated view
+                successful_df['hire_month'] = pd.to_datetime(successful_df['successful_date']).dt.strftime('%Y-%m')
+                
+                monthly_summary = successful_df.groupby(['hire_month', 'nationality_category', 'location_category']).agg({
+                    'marketing_cost_per_hire': ['count', 'mean', 'sum']
+                }).round(2)
+                
+                # Flatten column names
+                monthly_summary.columns = ['Hire_Count', 'Avg_Cost_per_Hire', 'Total_Marketing_Cost']
+                monthly_summary = monthly_summary.reset_index()
+                
+                # Rename columns for display
+                monthly_summary = monthly_summary.rename(columns={
+                    'hire_month': 'Month',
+                    'nationality_category': 'Nationality',
+                    'location_category': 'Location',
+                    'Hire_Count': 'Hires',
+                    'Avg_Cost_per_Hire': 'Avg Cost/Hire (AED)',
+                    'Total_Marketing_Cost': 'Total Cost (AED)'
+                })
+                
+                st.subheader("📊 Monthly Marketing Cost Summary")
+                st.dataframe(monthly_summary, use_container_width=True)
+                
+                # Summary metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    total_hires = monthly_summary['Hires'].sum()
+                    st.metric("Total Successful Hires", f"{total_hires:,}")
+                with col2:
+                    total_marketing = monthly_summary['Total Cost (AED)'].sum()
+                    st.metric("Total Marketing Spend", f"{total_marketing:,.0f} AED")
+                with col3:
+                    avg_cost = total_marketing / total_hires if total_hires > 0 else 0
+                    st.metric("Overall Avg Cost/Hire", f"{avg_cost:.2f} AED")
+            else:
+                st.warning("No successful hires found to display marketing costs.")
+        else:
+            st.warning("⚠️ Please load data first in the 'Cost per Hire' tab to view marketing cost analysis.")
     
     with tab10:
         st.header("⚙️ Operator Costs Data")
         st.info("Operator costs are calculated based on freedom operator assignments and nationality")
         
-        if st.session_state.df is not None:
+        if st.session_state.data_loaded and st.session_state.df is not None and not st.session_state.df.empty:
             df = st.session_state.df
-            operator_summary = df[df['operator_cost'] > 0].groupby(['nationality_category', 'freedom_operator'])['operator_cost'].agg(['count', 'mean']).round(2)
-            operator_summary.columns = ['Count', 'Cost per Hire']
-            st.dataframe(operator_summary, use_container_width=True)
+            
+            # Show operator costs breakdown
+            if 'operator_cost' in df.columns and 'freedom_operator' in df.columns:
+                operator_data = df[df['operator_cost'] > 0].copy()
+                
+                if not operator_data.empty:
+                    st.subheader("📊 Operator Cost Summary")
+                    operator_summary = operator_data.groupby(['nationality_category', 'freedom_operator']).agg({
+                        'operator_cost': ['count', 'mean', 'sum']
+                    }).round(2)
+                    
+                    # Flatten column names
+                    operator_summary.columns = ['Count', 'Avg_Cost_per_Hire', 'Total_Cost']
+                    operator_summary = operator_summary.reset_index()
+                    
+                    # Rename for display
+                    operator_summary = operator_summary.rename(columns={
+                        'nationality_category': 'Nationality',
+                        'freedom_operator': 'Freedom Operator',
+                        'Count': 'Hires',
+                        'Avg_Cost_per_Hire': 'Avg Cost/Hire (AED)',
+                        'Total_Cost': 'Total Cost (AED)'
+                    })
+                    
+                    st.dataframe(operator_summary, use_container_width=True)
+                    
+                    # Operator cost rates
+                    st.subheader("💰 Operator Cost Rates")
+                    st.info("""
+                    **Cost Structure:**
+                    - **Marilyn**: 1,966 AED
+                    - **Ethiopian operators (WA)**: 3,303 AED (900 USD × 3.67)
+                    - **Ethiopian operators (Fiseha, Natnael, Tadesse)**: 3,670 AED (1,000 USD × 3.67)
+                    - **Ethiopian operators (Berana)**: 3,303 AED (900 USD × 3.67)
+                    """)
+                    
+                    # Summary metrics
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        total_with_operators = operator_summary['Hires'].sum()
+                        st.metric("Hires with Operators", f"{total_with_operators:,}")
+                    with col2:
+                        total_operator_cost = operator_summary['Total Cost (AED)'].sum()
+                        st.metric("Total Operator Costs", f"{total_operator_cost:,.0f} AED")
+                    with col3:
+                        avg_operator_cost = total_operator_cost / total_with_operators if total_with_operators > 0 else 0
+                        st.metric("Avg Operator Cost", f"{avg_operator_cost:.2f} AED")
+                else:
+                    st.warning("No records found with operator costs.")
+            else:
+                st.warning("Operator cost data not available. Please load data first.")
+        else:
+            st.warning("⚠️ Please load data first in the 'Cost per Hire' tab to view operator cost analysis.")
     
     with tab11:
         st.header("📋 Attestation Data")
-        st.info("Attestation costs would be loaded from a separate sheet (placeholder)")
-        st.warning("Attestation sheet ID needs to be configured")
         
-        if st.session_state.df is not None:
+        if st.session_state.data_loaded and st.session_state.df is not None and not st.session_state.df.empty:
             df = st.session_state.df
-            attestation_count = (df['attestation_cost'] > 0).sum()
-            st.metric("Records with Attestation Costs", attestation_count)
+            
+            if 'attestation_cost' in df.columns:
+                attestation_count = (df['attestation_cost'] > 0).sum()
+                total_attestation = df['attestation_cost'].sum()
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Records with Attestation Costs", attestation_count)
+                with col2:
+                    st.metric("Total Attestation Costs", f"{total_attestation:,.2f} AED")
+                
+                if attestation_count > 0:
+                    st.subheader("📊 Attestation Cost Breakdown")
+                    attestation_data = df[df['attestation_cost'] > 0][['maid_id', 'nationality_category', 'attestation_cost']].copy()
+                    st.dataframe(attestation_data.head(20), use_container_width=True)
+                else:
+                    st.info("ℹ️ Currently, all attestation costs are set to 0. This is a placeholder for future implementation.")
+                    st.warning("📝 **To implement attestation costs:** Please provide the Google Sheet ID containing attestation cost data.")
+            else:
+                st.error("Attestation cost column not found in the data.")
+        else:
+            st.warning("⚠️ Please load data first in the 'Cost per Hire' tab to view attestation cost analysis.")
+        
+        # Configuration section
+        st.subheader("⚙️ Configuration")
+        st.info("To enable attestation cost tracking, please provide the Google Sheet ID and configure the data source.")
+        
+        attestation_sheet_id = st.text_input("Attestation Sheet ID", placeholder="Enter Google Sheet ID here")
+        if attestation_sheet_id:
+            st.success(f"Sheet ID configured: {attestation_sheet_id}")
+            st.info("Note: Code modification required to implement attestation cost loading from this sheet.")
+        else:
+            st.warning("No attestation sheet ID configured.")
 
 if __name__ == "__main__":
     main()
-
-
 
 
 
