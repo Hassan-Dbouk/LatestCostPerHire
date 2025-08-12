@@ -4,3 +4,7 @@ plotly>=5.0.0
 google-cloud-bigquery>=3.0.0
 numpy>=2.3.0 
 gspread>=5.0.0
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
