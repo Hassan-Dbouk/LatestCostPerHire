@@ -731,15 +731,95 @@ def process_all_data(behavior_start_date=None, behavior_end_date=None, uploaded_
                 lambda row: 'ethiopian' if row['nationality_category'] == 'african' and row['nationality'] == 'ethiopian' else row['nationality_category'],
                 axis=1)
             
-            # For now, skip CSV integration to avoid data type issues
+            # Load CSV data if uploaded
             if uploaded_csv is not None:
-                st.warning("CSV integration temporarily disabled to ensure stability. Using GCP data only.")
-            
-            df = df_gcp
-            st.info("Using GCP data only for stability.")
-            
+                try:
+                    st.info("Loading data from uploaded CSV...")
+                    df_csv = load_csv_data(uploaded_csv)
+                    
+                    if df_csv is not None:
+                        # Process CSV integration logic here
+                        csv_maid_ids = set(df_csv['maid_id'])
+                        
+                        # Remove Ethiopian records from GCP data
+                        ethiopian_count = sum(df_gcp['nationality_category'] == 'ethiopian')
+                        df_gcp = df_gcp[df_gcp['nationality_category'] != 'ethiopian']
+                        
+                        # Set all successful_date values to null in GCP data
+                        df_gcp['successful_date'] = pd.NaT
+                        
+                        # Add missing columns
+                        for col in ['applicant_name', 'type', 'exit_loan', 'freedom_operator']:
+                            if col not in df_gcp.columns:
+                                df_gcp[col] = None if col in ['applicant_name', 'type'] else (0 if col == 'exit_loan' else '')
+                        
+                        # Update GCP data with CSV data
+                        update_dict = {}
+                        for idx, row in df_csv.iterrows():
+                            maid_id = str(row['maid_id'])
+                            update_values = {}
+                            
+                            for field in ['nationality_category', 'nationality', 'location_category', 'successful_date', 'applicant_name', 'type']:
+                                if field in df_csv.columns and pd.notna(row[field]):
+                                    update_values[field] = row[field]
+                            
+                            update_values['exit_loan'] = row['exit_loan'] if 'exit_loan' in df_csv.columns and pd.notna(row['exit_loan']) else 0
+                            update_values['freedom_operator'] = row['freedom_operator'] if 'freedom_operator' in df_csv.columns and pd.notna(row['freedom_operator']) else ''
+                            
+                            update_dict[maid_id] = update_values
+                        
+                        # Apply updates with proper data type handling
+                        for idx, row in df_gcp.iterrows():
+                            maid_id = str(row['maid_id'])
+                            if maid_id in update_dict:
+                                for field, value in update_dict[maid_id].items():
+                                    if field == 'maid_id':
+                                        df_gcp.at[idx, field] = str(value)
+                                    elif field in ['exit_loan']:
+                                        df_gcp.at[idx, field] = pd.to_numeric(value, errors='coerce')
+                                    elif field in ['application_date', 'successful_date']:
+                                        df_gcp.at[idx, field] = pd.to_datetime(value, errors='coerce')
+                                    else:
+                                        df_gcp.at[idx, field] = value
+                        
+                        # Add CSV-only records
+                        gcp_maid_ids = set(df_gcp['maid_id'])
+                        csv_only_ids = csv_maid_ids - gcp_maid_ids
+                        csv_only_records = df_csv[df_csv['maid_id'].isin(csv_only_ids)].copy()
+                        
+                        if not csv_only_records.empty:
+                            new_records_list = []
+                            for idx, row in csv_only_records.iterrows():
+                                new_row = {}
+                                for col in df_gcp.columns:
+                                    if col in csv_only_records.columns and pd.notna(row[col]):
+                                        if 'id' in col.lower() or col == 'maid_id':
+                                            new_row[col] = str(row[col])
+                                        else:
+                                            new_row[col] = row[col]
+                                    else:
+                                        new_row[col] = None
+                                new_records_list.append(new_row)
+                            
+                            new_records = pd.DataFrame(new_records_list)
+                            df = pd.concat([df_gcp, new_records], ignore_index=True)
+                        else:
+                            df = df_gcp
+                        
+                        st.success(f"Successfully integrated CSV data. Total records: {len(df)}")
+                    else:
+                        df = df_gcp
+                        st.warning("Could not load CSV data. Using GCP data only.")
+                        
+                except Exception as e:
+                    st.error(f"Error loading CSV data: {e}")
+                    df = df_gcp
+            else:
+                df = df_gcp
+                st.info("No CSV file uploaded. Using GCP data only.")
+                
     except Exception as e:
-        st.error(f"Error in data processing: {str(e)[:100]}...")
+        st.error(f"Error in main data processing: {str(e)[:100]}...")
         return pd.DataFrame()
                 
                 if df_csv is not None:
